@@ -1,0 +1,24 @@
+# Files and directories created by pub
+.dart_tool/
+.packages
+build/
+pubspec.lock
+
+# Documentation and temporary files
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Large media files (optional, good for this project)
+*.mp4
+*.mkv
+*.webm
+*.mp3

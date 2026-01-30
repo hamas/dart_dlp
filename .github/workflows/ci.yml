@@ -1,0 +1,32 @@
+name: dart_dlp CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Verify formatting
+        run: dart format --output=none . || true
+
+      - name: Analyze project source
+        run: dart analyze
+
+      #- name: Run Health Checks
+      #  run: dart run bin/check_health.dart

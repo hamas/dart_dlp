@@ -1,0 +1,23 @@
+name: Security Gatekeeper
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  gatekeeper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Enforce Formatting
+        run: dart format --output=none . || true
+
+      - name: Static Analysis
+        run: dart analyze

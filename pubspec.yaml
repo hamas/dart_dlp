@@ -1,0 +1,28 @@
+name: dart_dlp
+description: A high-performance, pure Dart media extraction engine built by Hamas.
+version: 1.0.0
+repository: https://github.com/hamas/dart_dlp
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  http: ^1.1.0
+  html: ^0.15.4
+  args: ^2.4.2
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.hamas.dart_dlp
+        pluginClass: DartDlpPlugin
+      ios:
+        pluginClass: SwiftDartDlpPlugin
+
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0
