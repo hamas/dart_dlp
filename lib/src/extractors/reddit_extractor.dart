@@ -27,9 +27,13 @@ class RedditExtractor extends BaseExtractor {
       }
     }
 
+    final userAgent = UserAgentManager.random;
     final response = await http.get(
       Uri.parse(jsonUrl),
-      headers: {'User-Agent': UserAgentManager.random},
+      headers: {
+        ...RequestFactory.commonHeaders,
+        'User-Agent': userAgent,
+      },
     );
 
     onProgress?.call(0.5);
@@ -59,6 +63,7 @@ class RedditExtractor extends BaseExtractor {
       originalUrl: url,
       streams: [StreamInfo(url: fallbackUrl, quality: 'auto', format: 'mp4')],
       metadata: {'source': 'Reddit', 'jsonUrl': jsonUrl},
+      httpHeaders: {'User-Agent': userAgent},
     );
   }
 }

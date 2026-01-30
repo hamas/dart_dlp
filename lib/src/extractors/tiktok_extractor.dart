@@ -21,8 +21,10 @@ class TikTokExtractor extends BaseExtractor with JsonScraper {
     onProgress?.call(0.1);
 
     // 1. Fetch HTML
+    final userAgent = UserAgentManager.random;
     final headers = {
-      'User-Agent': UserAgentManager.random,
+      ...RequestFactory.commonHeaders,
+      'User-Agent': userAgent,
       'Referer': 'https://www.tiktok.com/',
     };
 
@@ -88,6 +90,10 @@ class TikTokExtractor extends BaseExtractor with JsonScraper {
         videoOnlyStreams: [], // TikTok usually sends mixed streams
         audioOnlyStreams: [], // Unless dynamic playback is on, but simple extraction usually gets single file.
         metadata: {'author': itemStruct['author']['uniqueId']},
+        httpHeaders: {
+          'User-Agent': userAgent,
+          'Referer': 'https://www.tiktok.com/',
+        },
       );
     } catch (e) {
       throw SiteNotSupportedException(

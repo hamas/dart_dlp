@@ -14,9 +14,13 @@ class FacebookExtractor extends BaseExtractor with JsonScraper {
   Future<VideoData> extract(String url,
       {Function(double p1)? onProgress}) async {
     onProgress?.call(0.1);
+    final userAgent = UserAgentManager.random;
     final response = await http.get(
       Uri.parse(url),
-      headers: {'User-Agent': UserAgentManager.random},
+      headers: {
+        ...RequestFactory.commonHeaders,
+        'User-Agent': userAgent,
+      },
     );
 
     onProgress?.call(0.5);
@@ -50,6 +54,7 @@ class FacebookExtractor extends BaseExtractor with JsonScraper {
       originalUrl: url,
       streams: streams,
       metadata: {'source': 'Facebook'},
+      httpHeaders: {'User-Agent': userAgent},
     );
   }
 }

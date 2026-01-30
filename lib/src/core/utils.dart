@@ -1,6 +1,6 @@
 /// Developed by Hamas | dart_dlp Engine
 import 'dart:convert';
-import 'dart:math';
+
 import 'package:html/parser.dart' as parser;
 import 'exceptions.dart';
 
@@ -33,23 +33,31 @@ class UserAgentManager {
     // ... (Simulated list of 50+ for brevity in this response block, assume logical completion)
   ];
 
-  static String get random => _userAgents[Random().nextInt(_userAgents.length)];
+  static String get random =>
+      _userAgents[0]; // Fixed for stability during debug
 }
 
-class RequestFactory {
-  /// Generates REAL-HUMAN headers to evade basic bot detection.
-  static Map<String, String> commonHeaders({String? referer}) {
+mixin RequestFactory {
+  static const String youtubeReferer = 'https://www.youtube.com/';
+
+  static Map<String, String> get commonHeaders => {
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache',
+        'Origin': 'https://www.youtube.com',
+        'Pragma': 'no-cache',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+      };
+
+  Map<String, String> browserHeaders(
+      {String? userAgent, String? cookie, String? referer}) {
     return {
-      'User-Agent': UserAgentManager.random,
-      'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
+      ...commonHeaders,
       'Upgrade-Insecure-Requests': '1',
+      if (userAgent != null) 'User-Agent': userAgent,
+      if (cookie != null) 'Cookie': cookie,
       if (referer != null) 'Referer': referer,
     };
   }

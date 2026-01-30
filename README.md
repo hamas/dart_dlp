@@ -85,7 +85,7 @@ We built a factory tool so you can add support for new sites in seconds.
 Use the CLI tool to generate a new extractor template. This ensures your code complies with our strict architectural standards.
 
 ```bash
-dart run bin/hamas_factory.dart my_new_site
+dart run tool/hamas_factory.dart my_new_site
 ```
 
 **Output:** `lib/src/extractors/my_new_site_extractor.dart`

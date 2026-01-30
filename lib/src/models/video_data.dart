@@ -18,7 +18,10 @@ class VideoData {
     this.videoOnlyStreams = const [],
     this.audioOnlyStreams = const [],
     required this.metadata,
+    this.httpHeaders = const {},
   });
+
+  final Map<String, String> httpHeaders;
 }
 
 class StreamInfo {

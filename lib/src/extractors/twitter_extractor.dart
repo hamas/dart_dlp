@@ -55,12 +55,14 @@ class TwitterExtractor extends BaseExtractor with JsonScraper {
     final endpoint =
         'https://twitter.com/i/api/graphql/TweetResultByRestId?variables=$query&features=$feats';
 
+    final userAgent = UserAgentManager.random;
     final apiResponse = await http.get(
       Uri.parse(endpoint),
       headers: {
+        ...RequestFactory.commonHeaders,
         'Authorization': 'Bearer $_bearerToken',
         'x-guest-token': guestToken,
-        'User-Agent': UserAgentManager.random,
+        'User-Agent': userAgent,
         'Content-Type': 'application/json',
       },
     );
@@ -111,6 +113,11 @@ class TwitterExtractor extends BaseExtractor with JsonScraper {
       originalUrl: url,
       streams: streams,
       metadata: {'source': 'X', 'guest_token': guestToken},
+      httpHeaders: {
+        'User-Agent': userAgent,
+        'Authorization': 'Bearer $_bearerToken',
+        'x-guest-token': guestToken,
+      },
     );
   }
 

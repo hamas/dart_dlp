@@ -66,11 +66,13 @@ class DlpController {
         // 2. Download Video
         _updateState(DlpStatus.downloading,
             'Downloading Video Track (${videoStream.quality})...');
-        await _downloader.download(videoStream.url, vPath);
+        await _downloader.download(videoStream.url, vPath,
+            headers: data.httpHeaders);
 
         // 3. Download Audio
         _updateState(DlpStatus.downloading, 'Downloading Audio Track...');
-        await _downloader.download(audioStream.url, aPath);
+        await _downloader.download(audioStream.url, aPath,
+            headers: data.httpHeaders);
 
         // 4. Native Muxing
         _updateState(
@@ -100,7 +102,8 @@ class DlpController {
         final stream = data.streams.first;
         _updateState(DlpStatus.downloading,
             'Downloading Single Stream (${stream.quality})...');
-        await _downloader.download(stream.url, finalPath);
+        await _downloader.download(stream.url, finalPath,
+            headers: data.httpHeaders);
         _updateState(DlpStatus.completed, 'Finished: $finalPath');
         return finalPath;
       } else {

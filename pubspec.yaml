@@ -4,7 +4,7 @@ version: 1.0.0
 repository: https://github.com/hamas/dart_dlp
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   http: ^1.1.0

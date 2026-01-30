@@ -16,10 +16,12 @@ class InstagramExtractor extends BaseExtractor with JsonScraper {
   Future<VideoData> extract(String url,
       {Function(double p1)? onProgress}) async {
     onProgress?.call(0.1);
+    final userAgent = UserAgentManager.random;
     final response = await http.get(
       Uri.parse(url),
       headers: {
-        'User-Agent': UserAgentManager.random,
+        ...RequestFactory.commonHeaders,
+        'User-Agent': userAgent,
         'Accept-Language': 'en-US,en;q=0.9',
       },
     );
@@ -100,6 +102,10 @@ class InstagramExtractor extends BaseExtractor with JsonScraper {
       metadata: {
         'source': 'Instagram',
         'has_data': true,
+      },
+      httpHeaders: {
+        'User-Agent': userAgent,
+        'Referer': 'https://www.instagram.com/',
       },
     );
   }

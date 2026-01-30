@@ -14,9 +14,14 @@ class PinterestExtractor extends BaseExtractor with JsonScraper {
   Future<VideoData> extract(String url,
       {Function(double p1)? onProgress}) async {
     onProgress?.call(0.1);
+    final userAgent = UserAgentManager.random;
     final response = await http.get(
       Uri.parse(url),
-      headers: {'User-Agent': UserAgentManager.random},
+      headers: {
+        ...RequestFactory.commonHeaders,
+        'User-Agent': userAgent,
+        'Referer': 'https://www.pinterest.com/',
+      },
     );
 
     onProgress?.call(0.5);
@@ -39,6 +44,10 @@ class PinterestExtractor extends BaseExtractor with JsonScraper {
       metadata: {
         'source': 'Pinterest',
         'raw_data': data,
+      },
+      httpHeaders: {
+        'User-Agent': userAgent,
+        'Referer': 'https://www.pinterest.com/',
       },
     );
   }

@@ -21,54 +21,103 @@ class HamasDownloader {
   /// [url] Source URL.
   /// [savePath] Destination file path.
   /// [chunks] Number of concurrent chunks (default: 8).
-  Future<void> download(String url, String savePath, {int chunks = 8}) async {
+  Future<void> download(String url, String savePath,
+      {int chunks = 8, Map<String, String>? headers}) async {
     final file = File(savePath);
     final raf = await file.open(mode: FileMode.write);
 
+    // 1. Get Content Length
+    int bodyLength = 0;
     try {
-      // 1. Get Content Length
-      final headResponse = await http.head(Uri.parse(url));
-      final lengthStr = headResponse.headers['content-length'];
-      if (lengthStr == null) {
-        // Fallback to single stream if no length
-        await _downloadSingle(url, raf);
-        return;
-      }
-      final totalLength = int.parse(lengthStr);
-
-      // 2. Calculate Chunk Sizes
-      final chunkSize = (totalLength / chunks).ceil();
-      final futures = <Future<void>>[];
-
-      int receivedBytes = 0;
-      final startTime = DateTime.now();
-
-      for (int i = 0; i < chunks; i++) {
-        final start = i * chunkSize;
-        final end =
-            (i == chunks - 1) ? totalLength - 1 : (start + chunkSize - 1);
-
-        futures.add(_downloadChunk(url, start, end, raf, (bytes) {
-          receivedBytes += bytes;
-          _reportProgress(receivedBytes, totalLength, startTime);
-        }));
+      final headResponse = await http.head(Uri.parse(url), headers: headers);
+      if (headResponse.statusCode == 200 || headResponse.statusCode == 206) {
+        bodyLength =
+            int.tryParse(headResponse.headers['content-length'] ?? '') ?? 0;
       }
 
+      if (bodyLength <= 0) {
+        // Fallback to GET with Range: bytes=0-0 (some signed URLs block HEAD)
+        final getResponse = await http.get(Uri.parse(url), headers: {
+          ...?headers,
+          'Range': 'bytes=0-0',
+        });
+        if (getResponse.statusCode == 206 || getResponse.statusCode == 200) {
+          final contentRange = getResponse.headers['content-range'];
+          if (contentRange != null && contentRange.contains('/')) {
+            bodyLength = int.tryParse(contentRange.split('/').last) ?? 0;
+          } else {
+            bodyLength =
+                int.tryParse(getResponse.headers['content-length'] ?? '') ?? 0;
+          }
+        }
+      }
+    } catch (e) {
+      print('Could not get content length: $e');
+    }
+
+    if (bodyLength <= 0) {
+      // Direct Download Fallback
+      await _downloadSingle(url, raf, headers: headers);
+      await raf.close();
+      _progressController.close();
+      return;
+    }
+
+    // 2. Calculate Chunk Sizes
+    final totalLength = bodyLength;
+    final chunkSize = (totalLength / chunks).ceil();
+    final futures = <Future<void>>[];
+
+    int receivedBytes = 0;
+    final startTime = DateTime.now();
+
+    for (int i = 0; i < chunks; i++) {
+      final start = i * chunkSize;
+      var end = (i + 1) * chunkSize - 1;
+      if (end >= totalLength) end = totalLength - 1;
+
+      futures.add(_downloadChunk(url, start, end, raf, (bytes) {
+        receivedBytes += bytes;
+      }, headers: headers));
+    }
+
+    // 3. Monitor Progress
+    final timer = Timer.periodic(const Duration(milliseconds: 500), (t) {
+      final elapsed = DateTime.now().difference(startTime).inSeconds;
+      final speed =
+          elapsed > 0 ? (receivedBytes / (1024 * 1024)) / elapsed : 0.0;
+      final percentage = (receivedBytes / totalLength) * 100;
+      final remainingBytes = totalLength - receivedBytes;
+      final etaSeconds =
+          speed > 0 ? (remainingBytes / (1024 * 1024)) / speed : 0;
+
+      _progressController.add(DownloadProgress(
+        percentage,
+        speed,
+        Duration(seconds: etaSeconds.toInt()),
+      ));
+    });
+
+    try {
       await Future.wait(futures);
     } finally {
+      timer.cancel();
       await raf.close();
       _progressController.close();
     }
   }
 
   Future<void> _downloadChunk(String url, int start, int end,
-      RandomAccessFile raf, Function(int) onBytes) async {
+      RandomAccessFile raf, Function(int) onBytes,
+      {Map<String, String>? headers}) async {
     final request = http.Request('GET', Uri.parse(url));
+    if (headers != null) request.headers.addAll(headers);
     request.headers['Range'] = 'bytes=$start-$end';
 
     final response = await request.send();
     if (response.statusCode != 200 && response.statusCode != 206) {
-      throw Exception('Failed to download chunk: ${response.statusCode}');
+      throw Exception(
+          'Failed to download chunk from $url: ${response.statusCode}');
     }
 
     // int offset = start; // Unused
@@ -93,6 +142,7 @@ class HamasDownloader {
     final chunkFile = await File(raf.path).open(mode: FileMode.write);
     try {
       final chunkRequest = http.Request('GET', Uri.parse(url));
+      if (headers != null) chunkRequest.headers.addAll(headers);
       chunkRequest.headers['Range'] = 'bytes=$start-$end';
       final chunkResponse = await chunkRequest.send();
 
@@ -108,9 +158,11 @@ class HamasDownloader {
     }
   }
 
-  Future<void> _downloadSingle(String url, RandomAccessFile raf) async {
+  Future<void> _downloadSingle(String url, RandomAccessFile raf,
+      {Map<String, String>? headers}) async {
     // Implementation for non-chunked fallback
     final request = http.Request('GET', Uri.parse(url));
+    if (headers != null) request.headers.addAll(headers);
     final response = await request.send();
     int total = response.contentLength ?? 0;
     int received = 0;

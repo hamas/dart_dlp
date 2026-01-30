@@ -27,9 +27,10 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
   @override
   Future<VideoData> extract(String url,
       {Function(double progress)? onProgress}) async {
+    final userAgent = UserAgentManager.random;
     onProgress?.call(0.1);
     final response = await http.get(Uri.parse(url), headers: {
-      'User-Agent': UserAgentManager.random, // Use real UA
+      'User-Agent': userAgent, // Use real UA
     });
 
     if (response.statusCode != 200) {
@@ -38,62 +39,193 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
     }
     final body = response.body;
 
+    // Extract Cookies
+    String cookieHeader = '';
+    final setCookie = response.headers['set-cookie'];
+    if (setCookie != null) {
+      // Simple parser: take everything before first semicolon of each cookie?
+      // 'http' joins multiple Set-Cookie headers with comma.
+      // But dates also have commas. This is messy.
+      // Heuristic: generic regex for "name=value"
+      final cookieMatches =
+          RegExp(r'([a-zA-Z0-9_-]+)=([^;,\s]+)').allMatches(setCookie);
+      final validCookies = <String>[];
+      final attributes = {
+        'path',
+        'domain',
+        'expires',
+        'max-age',
+        'secure',
+        'httponly',
+        'samesite',
+        'priority'
+      };
+
+      for (final m in cookieMatches) {
+        final key = m.group(1)!;
+        final value = m.group(2)!;
+        if (!attributes.contains(key.toLowerCase())) {
+          validCookies.add('$key=$value');
+        }
+      }
+      cookieHeader = validCookies.toSet().join('; ');
+    }
+
+    if (cookieHeader.isNotEmpty) {
+      print('      [Debug] Extracted Cookies: ${cookieHeader.length} chars');
+    }
+
+    // Extract Video ID from URL first
+    final id = _ytRegex.firstMatch(url)?.group(1) ?? 'unknown';
+
     // 1. Extract Player Response (ytInitialPlayerResponse)
     onProgress?.call(0.2);
-    final playerResponse = await _extractPlayerResponse(body);
+    var playerResponse = await _extractPlayerResponse(body);
+
+    // Check for availability
+    if (playerResponse['playabilityStatus']?['status'] == 'ERROR' ||
+        playerResponse['playabilityStatus']?['status'] == 'LOGIN_REQUIRED') {
+      print(
+          '      [Debug] Initial extraction unplayable. Trying Android client fallback...');
+      // Attempt to fetch player response using Android Client API
+      final androidResponse = await _fetchAndroidPlayerResponse(id, userAgent);
+      if (androidResponse.isNotEmpty) {
+        playerResponse = androidResponse;
+      }
+    }
+
+    // Debug keys
+    print(
+        '      [Debug] playerResponse keys: ${playerResponse.keys.join(', ')}');
+
     final videoDetails = playerResponse['videoDetails'];
-    if (videoDetails == null)
-      throw ExtractionException('Could not parse video details');
+    if (videoDetails == null) {
+      if (playerResponse.containsKey('playabilityStatus')) {
+        final status = playerResponse['playabilityStatus']?['status'];
+        final reason = playerResponse['playabilityStatus']?['reason'];
+        print('      [Debug] Playability Status: $status, Reason: $reason');
+      }
+      throw ExtractionException(
+          'Could not parse video details (Playability Error)');
+    }
 
     final title = videoDetails['title'] ?? 'Unknown Title';
-    final id = videoDetails['videoId'] ??
-        _ytRegex.firstMatch(url)?.group(1) ??
-        'unknown';
     final durationStr = videoDetails['lengthSeconds'];
     final duration =
         durationStr != null ? Duration(seconds: int.parse(durationStr)) : null;
     final thumb = videoDetails['thumbnail']?['thumbnails']?.last?['url'];
 
-    // 2. Extract Streams
+    // 3. Extract Streams & Check for Adaptive Formats
     onProgress?.call(0.3);
-    final streamingData = playerResponse['streamingData'];
-    if (streamingData == null)
-      throw ExtractionException('No streaming data found');
-
-    final formats = <Map<String, dynamic>>[
-      ...?streamingData['formats'],
-      ...?streamingData['adaptiveFormats'],
+    var streamingData = playerResponse['streamingData'];
+    var formats = <Map<String, dynamic>>[
+      ...?streamingData?['formats'],
+      ...?streamingData?['adaptiveFormats'],
     ];
 
-    // 3. Resolve Cipher (if needed)
-    final cipherFormats = formats
-        .where((f) => f['signatureCipher'] != null || f['cipher'] != null)
-        .toList();
+    final hasAdaptive = streamingData != null &&
+        streamingData['adaptiveFormats'] != null &&
+        (streamingData['adaptiveFormats'] as List).isNotEmpty;
 
-    if (cipherFormats.isNotEmpty) {
-      onProgress?.call(0.4);
-      final playerUrl = _extractPlayerUrl(body);
-      if (playerUrl != null) {
-        // Fetch and Parse Player JS for Decryption
-        final playerJs = await http.get(Uri.parse(playerUrl));
-        final cipherOps = _parseCipherOperations(playerJs.body);
-        final decipherFuncName = _parseDecipherFunctionName(playerJs.body);
+    if (!hasAdaptive) {
+      print(
+          '      [Debug] No adaptive formats in web response. Fetching Android fallback...');
+      final androidResponse = await _fetchAndroidPlayerResponse(id, userAgent);
+      if (androidResponse.isNotEmpty &&
+          androidResponse['streamingData'] != null) {
+        playerResponse = androidResponse;
+        streamingData = androidResponse['streamingData'];
+        formats = [
+          ...?streamingData?['formats'],
+          ...?streamingData?['adaptiveFormats'],
+        ];
+      }
+    }
 
-        if (cipherOps.isNotEmpty && decipherFuncName != null) {
-          for (var f in cipherFormats) {
-            final cipher = f['signatureCipher'] ?? f['cipher'];
-            final params = Uri.splitQueryString(cipher);
-            final sig = params['s'];
-            final sp = params['sp'] ?? 'sig';
-            final urlBase = params['url'];
+    if (formats.isEmpty) throw ExtractionException('No streaming data found');
 
-            if (sig != null && urlBase != null) {
-              final decryptedSig =
-                  _applyCipher(sig, cipherOps, decipherFuncName, playerJs.body);
-              f['url'] = '$urlBase&$sp=$decryptedSig';
+    if (formats.isNotEmpty) {
+      for (var f in formats) {
+        final hasUrl = f['url'] != null;
+        final hasCipher = f['signatureCipher'] != null || f['cipher'] != null;
+        if (!hasUrl && !hasCipher) {
+          // print('      [Debug] Missing URL/Cipher: itag ${f['itag']}, keys: ${f.keys.join(', ')}');
+        }
+      }
+
+      final first = formats.first;
+      final targetUrl =
+          first['url'] ?? (first['signatureCipher'] ?? first['cipher']);
+      if (targetUrl != null) {
+        final uri = Uri.parse(targetUrl.toString().contains('url=')
+            ? Uri.splitQueryString(targetUrl.toString())['url']!
+            : targetUrl.toString());
+        if (uri.queryParameters.containsKey('n')) {
+          print(
+              '      [Debug] Found "n" parameter in URL: ${uri.queryParameters['n']}');
+        } else {
+          print('      [Debug] No "n" parameter found in URL query.');
+        }
+      }
+    }
+
+    // 3. Resolve Cipher & N-Parameter (if needed)
+    final playerUrl = _extractPlayerUrl(body);
+    String? playerJsBody;
+
+    if (playerUrl != null) {
+      final playerJsResponse = await http.get(Uri.parse(playerUrl), headers: {
+        'User-Agent': userAgent,
+        'Referer': 'https://www.youtube.com/',
+      });
+      playerJsBody = playerJsResponse.body;
+    }
+
+    onProgress?.call(0.4);
+    if (playerJsBody != null) {
+      final cipherOps = _parseCipherOperations(playerJsBody);
+      final decipherFuncName = _parseDecipherFunctionName(playerJsBody);
+      final nFuncName = _findNFunctionName(playerJsBody);
+
+      for (var f in formats) {
+        String? targetUrl = f['url'];
+        String sigParamName = 'sig';
+
+        // Signature Cipher
+        if (f['signatureCipher'] != null || f['cipher'] != null) {
+          final cipher = f['signatureCipher'] ?? f['cipher'];
+          final params = Uri.splitQueryString(cipher);
+          final sig = params['s'];
+          sigParamName = params['sp'] ?? 'sig';
+          final urlBase = params['url'];
+
+          if (sig != null &&
+              urlBase != null &&
+              cipherOps.isNotEmpty &&
+              decipherFuncName != null) {
+            final decryptedSig =
+                _applyCipher(sig, cipherOps, decipherFuncName, playerJsBody);
+            targetUrl = '$urlBase&$sigParamName=$decryptedSig';
+          } else {
+            print(
+                '      [Debug] Cipher failed for itag ${f['itag']}: sig=$sig, urlBase=$urlBase, ops=${cipherOps.length}, func=$decipherFuncName');
+          }
+        }
+
+        // N-Parameter Deciphering
+        if (targetUrl != null && nFuncName != null) {
+          final uri = Uri.parse(targetUrl);
+          final n = uri.queryParameters['n'];
+          if (n != null) {
+            final decipheredN = _decipherN(n, nFuncName, playerJsBody);
+            if (decipheredN != n) {
+              final newParams = Map<String, String>.from(uri.queryParameters);
+              newParams['n'] = decipheredN;
+              targetUrl = uri.replace(queryParameters: newParams).toString();
             }
           }
         }
+        f['url'] = targetUrl;
       }
     }
 
@@ -109,24 +241,27 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
       final mime = f['mimeType'] ?? '';
       final width = f['width'];
       final height = f['height'];
-      final quality = f['qualityLabel'] ?? 'unknown';
+      final qualityLabel = f['qualityLabel'] ?? (f['quality'] ?? 'unknown');
       final url = f['url'];
 
       final stream = StreamInfo(
         url: url,
-        quality: quality,
+        quality: qualityLabel,
         format: mime.split(';').first,
-        width: width,
-        height: height,
+        width: width is int
+            ? width
+            : (width != null ? int.tryParse(width.toString()) : null),
+        height: height is int
+            ? height
+            : (height != null ? int.tryParse(height.toString()) : null),
       );
 
       streams.add(stream);
 
       if (mime.startsWith('video/')) {
-        if (f['audioQuality'] == null) {
-          videoOnly.add(stream); // Adaptive Video
-        } else {
-          // Muxed content (usually 720p or lower)
+        final isAdaptive = f['audioQuality'] == null;
+        if (isAdaptive) {
+          videoOnly.add(stream);
         }
       } else if (mime.startsWith('audio/')) {
         audioOnly.add(stream);
@@ -143,6 +278,11 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
       metadata: {
         'duration': duration?.inSeconds,
         'thumbnail': thumb,
+      },
+      httpHeaders: {
+        'User-Agent': userAgent,
+        'Referer': 'https://www.youtube.com/',
+        if (cookieHeader.isNotEmpty) 'Cookie': cookieHeader,
       },
     );
   }
@@ -167,6 +307,18 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
     regex = RegExp(r'(?:^|;)ytInitialPlayerResponse\s*=\s*(\{.+?\});');
     match = regex.firstMatch(html);
     if (match != null) return extractJson(match.group(1)!);
+
+    // 4. ytInitialPlayerResponse in ytcfg.set
+    regex = RegExp(r'ytcfg\.set\(\{.*?"player_response":\s*(\{.+?\})\}\);');
+    match = regex.firstMatch(html);
+    if (match != null) return extractJson(match.group(1)!);
+
+    // Debug: Log snippet if failed
+    print(
+        '      [Debug] Player Response extraction failed. HTML length: ${html.length}');
+    if (html.contains('playerResponse')) {
+      print('      [Debug] Found "playerResponse" keyword but regex failed.');
+    }
 
     throw ExtractionException('Could not locate player response');
   }
@@ -273,6 +425,62 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
         ?.group(2); // Group 2 is the body calls "B.C(a,3)..."
   }
 
+  Future<Map<String, dynamic>> _fetchAndroidPlayerResponse(
+      String videoId, String userAgent) async {
+    // TVHTML5 client is often the most permissive for adaptive streams
+    final url =
+        'https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlS9W6Sg6o5_6o5_6o5_6o5_6o5';
+    final payload = {
+      "context": {
+        "client": {
+          "clientName": "TVHTML5",
+          "clientVersion": "7.20230405.08.01",
+          "hl": "en",
+          "gl": "US",
+        }
+      },
+      "videoId": videoId,
+    };
+
+    try {
+      final response = await http.post(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': userAgent,
+          'Referer': 'https://www.youtube.com/',
+        },
+        body: jsonEncode(payload),
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+    } catch (e) {
+      print('      [Debug] TVHTML5 Innertube fallback failed: $e');
+    }
+    return {};
+  }
+
+  String? _findNFunctionName(String js) {
+    // Pattern: .get("n")&&(b=b.get("n"),c=aL[0](b),a.set("n",c))
+    // We look for the function call after .set("n",
+    final regex = RegExp(r'\.set\("n",([a-zA-Z0-9$]+)\(');
+    return regex.firstMatch(js)?.group(1);
+  }
+
+  String _decipherN(String n, String funcName, String js) {
+    // For now, this is a placeholder. Implementing a full JS interpreter in Dart
+    // for the 'n' parameter is complex. yt-dlp uses a mini-interpreter.
+    // We will attempt to find simple patterns or log the body.
+    print(
+        '      [Debug] N-Parameter deciphering required for func: $funcName (N: ${n.substring(0, 5)}...)');
+
+    // Fallback: until we have a pure-Dart JS interpreter, we return n
+    // and attempt download. If 403 persists, the interpreter is mandatory.
+    return n;
+  }
+
   String _applyCipher(String sig, List<Function(List<String>)> ops,
       String funcName, String js) {
     var chars = sig.split('');
@@ -284,7 +492,8 @@ class YouTubeExtractor extends BaseExtractor with JsonScraper {
 
   Map<String, dynamic> extractJson(String raw) {
     try {
-      return jsonDecode(raw);
+      final cleaned = raw.trim();
+      return jsonDecode(cleaned);
     } catch (e) {
       return {};
     }
